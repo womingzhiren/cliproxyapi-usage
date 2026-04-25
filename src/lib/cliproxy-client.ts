@@ -5,7 +5,7 @@ export class HttpCliproxyClient implements CliproxyClient {
   constructor(
     private readonly baseUrl: string,
     private readonly managementKey: string,
-    private readonly fetchImpl: typeof fetch = fetch
+    private readonly fetchImpl?: typeof fetch
   ) {}
 
   async exportUsage(): Promise<CliproxyExportPayload> {
@@ -25,7 +25,8 @@ export class HttpCliproxyClient implements CliproxyClient {
   }
 
   private async request<T>(path: string, init: RequestInit): Promise<T> {
-    const response = await this.fetchImpl(new URL(path, this.baseUrl), {
+    const fetchImpl = this.fetchImpl ?? globalThis.fetch.bind(globalThis);
+    const response = await fetchImpl(new URL(path, this.baseUrl), {
       ...init,
       headers: {
         authorization: `Bearer ${this.managementKey}`,

@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cliproxyapi-usage",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cliproxyapi-usage",
+      "database_id": "d9c9b71b-09d9-4316-82c3-48d8f7d97598",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "SNAPSHOTS",
+      "bucket_name": "cliproxyapi-usage-snapshots"
+    }
+  ],
+  "vars": {
+    "INSTANCE_ID": "default",
+    "AUTO_RESTORE_ENABLED": "true",
+    "RESTORE_COOLDOWN_MINUTES": "30"
+  }
+}

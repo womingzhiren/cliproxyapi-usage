@@ -105,15 +105,7 @@ export default {
     const deps = createDependencies(env);
     const now = new Date().toISOString();
 
-    await backupUsage({
-      now,
-      instanceId: deps.instance.id,
-      client: deps.client,
-      bucket: deps.bucket,
-      repo: deps.repo
-    });
-
-    await maybeRestoreUsage({
+    const restoreResult = await maybeRestoreUsage({
       now,
       instanceId: deps.instance.id,
       cooldownMinutes: deps.cooldownMinutes,
@@ -122,6 +114,16 @@ export default {
       bucket: deps.bucket,
       repo: deps.repo
     });
+
+    if (restoreResult.status !== "restored") {
+      await backupUsage({
+        now,
+        instanceId: deps.instance.id,
+        client: deps.client,
+        bucket: deps.bucket,
+        repo: deps.repo
+      });
+    }
   }
 };
 

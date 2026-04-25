@@ -1,5 +1,5 @@
 import type { CliproxyClient, SnapshotBucket, UsageRepository } from "./contracts";
-import { summarizeUsageExport } from "./usage";
+import { buildCumulativeBackupKey, sha256Hex, stableStringify, summarizeUsageExport } from "./usage";
 import type { CliproxyExportPayload, InstanceStateRecord, SyncRunRecord } from "../types";
 
 interface RestoreOptions {
@@ -43,29 +43,29 @@ export async function maybeRestoreUsage(options: RestoreOptions) {
       return { status: "cooldown" as const };
     }
 
-    const latestSnapshot = await repo.getLatestSnapshot();
-    if (!latestSnapshot) {
+    const baseline = await loadRestoreBaseline(instanceId, state, repo, bucket, now);
+    if (!baseline) {
       await repo.setState({
         ...coerceState(state, instanceId, now),
         lastSeenEmptyAt: now
       });
-      await repo.recordRun(skipRun(instanceId, runType, startedAt, now, "no snapshot available"));
-      return { status: "no-snapshot" as const };
+      await repo.recordRun(skipRun(instanceId, runType, startedAt, now, "no restore baseline"));
+      return { status: "no-baseline" as const };
     }
 
-    const raw = await bucket.get(latestSnapshot.r2Key);
-    if (!raw) {
-      throw new Error(`snapshot payload missing: ${latestSnapshot.r2Key}`);
-    }
-
-    const payload = JSON.parse(raw) as CliproxyExportPayload;
-    const importResult = await client.importUsage(payload);
+    const importResult = await client.importUsage(baseline.payload);
 
     await repo.setState({
       ...coerceState(state, instanceId, now),
       lastRestoreAt: now,
-      lastRestoreSnapshotId: latestSnapshot.id,
+      lastRestoreSnapshotId: null,
       lastSeenEmptyAt: now,
+      backupR2Key: baseline.key,
+      lastNonEmptyBackupAt: state?.lastNonEmptyBackupAt ?? now,
+      backupTotalRequests: baseline.summary.totalRequests,
+      backupTotalTokens: baseline.summary.totalTokens,
+      backupItemCount: baseline.summary.itemCount,
+      lastBackupHash: baseline.hash,
       lastError: null
     });
     await repo.recordRun({
@@ -73,15 +73,14 @@ export async function maybeRestoreUsage(options: RestoreOptions) {
       instanceId,
       runType,
       status: "success",
-      message: `restored ${importResult.total_requests} requests`,
-      snapshotId: latestSnapshot.id,
+      message: `restored ${importResult.total_requests} requests from cumulative backup`,
+      snapshotId: null,
       startedAt,
       finishedAt: now
     });
 
     return {
-      status: "restored" as const,
-      snapshotId: latestSnapshot.id
+      status: "restored" as const
     };
   } catch (error) {
     await repo.setState({
@@ -119,8 +118,58 @@ function coerceState(
     lastRestoreSnapshotId: state?.lastRestoreSnapshotId ?? null,
     lastSeenEmptyAt: state?.lastSeenEmptyAt ?? null,
     lastError: state?.lastError ?? null,
+    backupR2Key: state?.backupR2Key ?? null,
+    lastNonEmptyBackupAt: state?.lastNonEmptyBackupAt ?? null,
+    backupTotalRequests: state?.backupTotalRequests ?? null,
+    backupTotalTokens: state?.backupTotalTokens ?? null,
+    backupItemCount: state?.backupItemCount ?? null,
     updatedAt: now
   };
+}
+
+async function loadRestoreBaseline(
+  instanceId: string,
+  state: InstanceStateRecord | null,
+  repo: UsageRepository,
+  bucket: SnapshotBucket,
+  now: string
+) {
+  const key = state?.backupR2Key ?? buildCumulativeBackupKey(instanceId);
+  const currentRaw = await bucket.get(key);
+  if (currentRaw) {
+    const payload = JSON.parse(currentRaw) as CliproxyExportPayload;
+    const summary = summarizeUsageExport(payload);
+    if (!summary.isEmpty) {
+      return {
+        key,
+        payload,
+        summary,
+        hash: await sha256Hex(payload)
+      };
+    }
+  }
+
+  const legacySnapshots = await repo.listSnapshots(100);
+  for (const snapshot of legacySnapshots) {
+    const raw = await bucket.get(snapshot.r2Key);
+    if (!raw) {
+      continue;
+    }
+    const payload = JSON.parse(raw) as CliproxyExportPayload;
+    const summary = summarizeUsageExport(payload);
+    if (summary.isEmpty) {
+      continue;
+    }
+    await bucket.put(key, stableStringify(payload));
+    return {
+      key,
+      payload,
+      summary,
+      hash: await sha256Hex(payload)
+    };
+  }
+
+  return null;
 }
 
 function isInCooldown(lastRestoreAt: string | null, now: string, cooldownMinutes: number): boolean {

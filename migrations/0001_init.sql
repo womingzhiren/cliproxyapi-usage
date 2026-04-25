@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS instance_state (
   last_restore_snapshot_id TEXT,
   last_seen_empty_at TEXT,
   last_error TEXT,
+  backup_r2_key TEXT,
+  last_non_empty_backup_at TEXT,
+  backup_total_requests INTEGER,
+  backup_total_tokens INTEGER,
+  backup_item_count INTEGER,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (instance_id) REFERENCES instances(id),
   FOREIGN KEY (last_restore_snapshot_id) REFERENCES snapshots(id)

@@ -15,6 +15,12 @@ export interface UsageDetail {
   cost?: number;
 }
 
+export interface UsageDetailWithContext {
+  api: string;
+  model: string;
+  detail: UsageDetail;
+}
+
 export interface UsageModel {
   total_requests: number;
   total_tokens: number;
@@ -108,6 +114,11 @@ export interface InstanceStateRecord {
   lastRestoreSnapshotId: string | null;
   lastSeenEmptyAt: string | null;
   lastError: string | null;
+  backupR2Key: string | null;
+  lastNonEmptyBackupAt: string | null;
+  backupTotalRequests: number | null;
+  backupTotalTokens: number | null;
+  backupItemCount: number | null;
   updatedAt: string;
 }
 

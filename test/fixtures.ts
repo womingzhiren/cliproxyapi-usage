@@ -1,6 +1,7 @@
 import type {
   CliproxyExportPayload,
   CliproxyImportResult,
+  InstanceStateRecord,
   SnapshotRecord,
   SyncRunRecord,
   UsageSummary
@@ -77,12 +78,40 @@ export function createExportPayload(overrides?: Partial<CliproxyExportPayload>):
   };
 }
 
+export function createEmptyExportPayload(overrides?: Partial<CliproxyExportPayload>): CliproxyExportPayload {
+  const payload = createExportPayload();
+  return {
+    ...payload,
+    usage: {
+      ...payload.usage,
+      total_requests: 0,
+      success_count: 0,
+      failure_count: 0,
+      total_tokens: 0,
+      requests_by_day: {},
+      requests_by_hour: {},
+      tokens_by_day: {},
+      tokens_by_hour: {},
+      apis: {}
+    },
+    ...overrides
+  };
+}
+
 export class FakeCliproxyClient implements CliproxyClient {
   public importCalls: CliproxyExportPayload[] = [];
+  public exportCalls = 0;
 
-  constructor(private readonly currentExport: CliproxyExportPayload, private readonly importResult?: CliproxyImportResult) {}
+  constructor(
+    private readonly currentExport: CliproxyExportPayload | CliproxyExportPayload[],
+    private readonly importResult?: CliproxyImportResult
+  ) {}
 
   async exportUsage(): Promise<CliproxyExportPayload> {
+    this.exportCalls += 1;
+    if (Array.isArray(this.currentExport)) {
+      return this.currentExport[Math.min(this.exportCalls - 1, this.currentExport.length - 1)];
+    }
     return this.currentExport;
   }
 
@@ -112,16 +141,7 @@ export class FakeSnapshotBucket implements SnapshotBucket {
 export class FakeUsageRepository implements UsageRepository {
   public snapshots: SnapshotRecord[] = [];
   public syncRuns: SyncRunRecord[] = [];
-  public state: {
-    instanceId: string;
-    lastBackupAt: string | null;
-    lastBackupHash: string | null;
-    lastRestoreAt: string | null;
-    lastRestoreSnapshotId: string | null;
-    lastSeenEmptyAt: string | null;
-    lastError: string | null;
-    updatedAt: string;
-  } | null = null;
+  public state: InstanceStateRecord | null = null;
 
   public instance = {
     id: "default",
@@ -139,7 +159,7 @@ export class FakeUsageRepository implements UsageRepository {
     return this.state;
   }
 
-  async setState(nextState: FakeUsageRepository["state"]): Promise<void> {
+  async setState(nextState: InstanceStateRecord | null): Promise<void> {
     this.state = nextState;
   }
 

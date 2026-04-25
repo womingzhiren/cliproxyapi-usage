@@ -58,8 +58,10 @@ export class D1UsageRepository implements UsageRepository {
       .prepare(
         `INSERT INTO instance_state (
            instance_id, last_backup_at, last_backup_hash, last_restore_at,
-           last_restore_snapshot_id, last_seen_empty_at, last_error, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           last_restore_snapshot_id, last_seen_empty_at, last_error, backup_r2_key,
+           last_non_empty_backup_at, backup_total_requests, backup_total_tokens,
+           backup_item_count, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(instance_id) DO UPDATE SET
            last_backup_at = excluded.last_backup_at,
            last_backup_hash = excluded.last_backup_hash,
@@ -67,6 +69,11 @@ export class D1UsageRepository implements UsageRepository {
            last_restore_snapshot_id = excluded.last_restore_snapshot_id,
            last_seen_empty_at = excluded.last_seen_empty_at,
            last_error = excluded.last_error,
+           backup_r2_key = excluded.backup_r2_key,
+           last_non_empty_backup_at = excluded.last_non_empty_backup_at,
+           backup_total_requests = excluded.backup_total_requests,
+           backup_total_tokens = excluded.backup_total_tokens,
+           backup_item_count = excluded.backup_item_count,
            updated_at = excluded.updated_at`
       )
       .bind(
@@ -77,6 +84,11 @@ export class D1UsageRepository implements UsageRepository {
         state.lastRestoreSnapshotId,
         state.lastSeenEmptyAt,
         state.lastError,
+        state.backupR2Key,
+        state.lastNonEmptyBackupAt,
+        state.backupTotalRequests,
+        state.backupTotalTokens,
+        state.backupItemCount,
         state.updatedAt
       )
       .run();
@@ -198,6 +210,11 @@ function mapState(row: Record<string, unknown>): InstanceStateRecord {
     lastRestoreSnapshotId: row.last_restore_snapshot_id ? String(row.last_restore_snapshot_id) : null,
     lastSeenEmptyAt: row.last_seen_empty_at ? String(row.last_seen_empty_at) : null,
     lastError: row.last_error ? String(row.last_error) : null,
+    backupR2Key: row.backup_r2_key ? String(row.backup_r2_key) : null,
+    lastNonEmptyBackupAt: row.last_non_empty_backup_at ? String(row.last_non_empty_backup_at) : null,
+    backupTotalRequests: row.backup_total_requests != null ? Number(row.backup_total_requests) : null,
+    backupTotalTokens: row.backup_total_tokens != null ? Number(row.backup_total_tokens) : null,
+    backupItemCount: row.backup_item_count != null ? Number(row.backup_item_count) : null,
     updatedAt: String(row.updated_at)
   };
 }

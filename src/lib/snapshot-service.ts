@@ -1,5 +1,11 @@
 import type { CliproxyClient, SnapshotBucket, UsageRepository } from "./contracts";
-import { buildSnapshotKey, sha256Hex, stableStringify, summarizeUsageExport } from "./usage";
+import {
+  buildCumulativeBackupKey,
+  mergeUsageExports,
+  sha256Hex,
+  stableStringify,
+  summarizeUsageExport
+} from "./usage";
 import type { InstanceStateRecord, SnapshotRecord, SyncRunRecord } from "../types";
 
 interface BackupUsageOptions {
@@ -22,21 +28,53 @@ export async function backupUsage(options: BackupUsageOptions) {
   try {
     const payload = await client.exportUsage();
     const summary = summarizeUsageExport(payload);
-    const contentHash = await sha256Hex(payload);
-
-    if (state?.lastBackupHash === contentHash) {
+    if (summary.isEmpty) {
       await repo.setState({
         ...coerceState(state, instanceId, now),
-        lastBackupAt: now,
-        lastBackupHash: contentHash,
+        lastSeenEmptyAt: now,
         lastError: null
       });
       await repo.recordRun({
         id: crypto.randomUUID(),
         instanceId,
         runType,
-        status: "success",
-        message: "usage unchanged; snapshot skipped",
+        status: "skipped",
+        message: "empty export; cumulative backup preserved",
+        snapshotId: null,
+        startedAt,
+        finishedAt: now
+      });
+      return {
+        status: "empty" as const,
+        summary
+      };
+    }
+
+    const backupKey = state?.backupR2Key ?? buildCumulativeBackupKey(instanceId);
+    const existingRaw = await bucket.get(backupKey);
+    const existingPayload = existingRaw ? (JSON.parse(existingRaw) as typeof payload) : null;
+    const mergedPayload = mergeUsageExports(existingPayload, payload);
+    const mergedSummary = summarizeUsageExport(mergedPayload);
+    const contentHash = await sha256Hex(mergedPayload);
+
+    if (state?.lastBackupHash === contentHash) {
+      await repo.setState({
+        ...coerceState(state, instanceId, now),
+        lastBackupAt: now,
+        lastBackupHash: contentHash,
+        backupR2Key: backupKey,
+        lastNonEmptyBackupAt: now,
+        backupTotalRequests: mergedSummary.totalRequests,
+        backupTotalTokens: mergedSummary.totalTokens,
+        backupItemCount: mergedSummary.itemCount,
+        lastError: null
+      });
+      await repo.recordRun({
+        id: crypto.randomUUID(),
+        instanceId,
+        runType,
+        status: "skipped",
+        message: "usage unchanged; cumulative backup preserved",
         snapshotId: null,
         startedAt,
         finishedAt: now
@@ -48,37 +86,41 @@ export async function backupUsage(options: BackupUsageOptions) {
       };
     }
 
-    const key = buildSnapshotKey(instanceId, payload.exported_at ?? now, contentHash);
-    await bucket.put(key, stableStringify(payload));
+    await bucket.put(backupKey, stableStringify(mergedPayload));
 
     const snapshot: SnapshotRecord = {
       id: crypto.randomUUID(),
       instanceId,
       snapshotTime: payload.exported_at ?? now,
-      r2Key: key,
+      r2Key: backupKey,
       contentHash,
-      itemCount: summary.itemCount,
-      totalCost: summary.totalCost,
-      totalTokens: summary.totalTokens,
-      totalRequests: summary.totalRequests,
-      failedRequests: summary.failedRequests,
+      itemCount: mergedSummary.itemCount,
+      totalCost: mergedSummary.totalCost,
+      totalTokens: mergedSummary.totalTokens,
+      totalRequests: mergedSummary.totalRequests,
+      failedRequests: mergedSummary.failedRequests,
       sourceStatus: "success",
       createdAt: now
     };
 
     await repo.insertSnapshot(snapshot);
     await repo.setState({
-      ...coerceState(state, instanceId, now),
-      lastBackupAt: now,
-      lastBackupHash: contentHash,
-      lastError: null
-    });
+        ...coerceState(state, instanceId, now),
+        lastBackupAt: now,
+        lastBackupHash: contentHash,
+        backupR2Key: backupKey,
+        lastNonEmptyBackupAt: now,
+        backupTotalRequests: mergedSummary.totalRequests,
+        backupTotalTokens: mergedSummary.totalTokens,
+        backupItemCount: mergedSummary.itemCount,
+        lastError: null
+      });
     await repo.recordRun({
       id: crypto.randomUUID(),
       instanceId,
       runType,
       status: "success",
-      message: "stored usage snapshot",
+      message: "stored cumulative usage backup",
       snapshotId: snapshot.id,
       startedAt,
       finishedAt: now
@@ -87,7 +129,7 @@ export async function backupUsage(options: BackupUsageOptions) {
     return {
       status: "stored" as const,
       hash: contentHash,
-      summary,
+      summary: mergedSummary,
       snapshot
     };
   } catch (error) {
@@ -125,6 +167,11 @@ function coerceState(
     lastRestoreSnapshotId: state?.lastRestoreSnapshotId ?? null,
     lastSeenEmptyAt: state?.lastSeenEmptyAt ?? null,
     lastError: state?.lastError ?? null,
+    backupR2Key: state?.backupR2Key ?? null,
+    lastNonEmptyBackupAt: state?.lastNonEmptyBackupAt ?? null,
+    backupTotalRequests: state?.backupTotalRequests ?? null,
+    backupTotalTokens: state?.backupTotalTokens ?? null,
+    backupItemCount: state?.backupItemCount ?? null,
     updatedAt: now
   };
 }

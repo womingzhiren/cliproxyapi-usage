@@ -10,7 +10,23 @@ Cloudflare Worker for persisting `cliproxyapi` usage exports into R2, tracking s
 - Stores raw export JSON in R2.
 - Stores snapshot metadata, sync runs, and restore state in D1.
 - Detects empty usage and restores from the latest snapshot with `POST /v0/management/usage/import`.
-- Exposes a small admin API and a basic status page with manual backup/restore actions.
+- Exposes a small admin API and a basic status page with manual backup/restore actions and recent run history.
+
+## Operational Behavior
+
+- Automatic restore and automatic backup are driven by the Worker cron trigger, not by direct container lifecycle hooks.
+- The default schedule is every 5 minutes via `wrangler.jsonc`:
+
+```json
+"triggers": {
+  "crons": ["*/5 * * * *"]
+}
+```
+
+- On each scheduled run, the Worker tries restore first.
+- If restore is skipped or fails, the Worker then runs backup.
+- After a `cliproxyapi` container restart, recovery happens when the next cron run executes and decides restore is needed.
+- To confirm what happened, open the status page and inspect `Recent runs`, `Last automatic restore`, `Last automatic backup`, `Last restore`, and `Last error`.
 
 ## Runtime Configuration
 

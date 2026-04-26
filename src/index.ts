@@ -1,5 +1,6 @@
 import { createApp } from "./app";
 import { HttpCliproxyClient } from "./lib/cliproxy-client";
+import { runAutomaticSync } from "./lib/auto-sync-service";
 import { D1UsageRepository } from "./lib/d1-repository";
 import { maybeRestoreUsage } from "./lib/restore-service";
 import { backupUsage } from "./lib/snapshot-service";
@@ -103,10 +104,8 @@ export default {
 
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
     const deps = createDependencies(env);
-    const now = new Date().toISOString();
-
-    const restoreResult = await maybeRestoreUsage({
-      now,
+    await runAutomaticSync({
+      now: new Date().toISOString(),
       instanceId: deps.instance.id,
       cooldownMinutes: deps.cooldownMinutes,
       autoRestoreEnabled: deps.autoRestoreEnabled,
@@ -114,16 +113,6 @@ export default {
       bucket: deps.bucket,
       repo: deps.repo
     });
-
-    if (restoreResult.status !== "restored") {
-      await backupUsage({
-        now,
-        instanceId: deps.instance.id,
-        client: deps.client,
-        bucket: deps.bucket,
-        repo: deps.repo
-      });
-    }
   }
 };
 

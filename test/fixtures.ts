@@ -103,16 +103,22 @@ export class FakeCliproxyClient implements CliproxyClient {
   public exportCalls = 0;
 
   constructor(
-    private readonly currentExport: CliproxyExportPayload | CliproxyExportPayload[],
+    private readonly currentExport:
+      | CliproxyExportPayload
+      | Error
+      | Array<CliproxyExportPayload | Error>,
     private readonly importResult?: CliproxyImportResult
   ) {}
 
   async exportUsage(): Promise<CliproxyExportPayload> {
     this.exportCalls += 1;
-    if (Array.isArray(this.currentExport)) {
-      return this.currentExport[Math.min(this.exportCalls - 1, this.currentExport.length - 1)];
+    const nextValue = Array.isArray(this.currentExport)
+      ? this.currentExport[Math.min(this.exportCalls - 1, this.currentExport.length - 1)]
+      : this.currentExport;
+    if (nextValue instanceof Error) {
+      throw nextValue;
     }
-    return this.currentExport;
+    return nextValue;
   }
 
   async importUsage(payload: CliproxyExportPayload): Promise<CliproxyImportResult> {

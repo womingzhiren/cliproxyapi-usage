@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { maybeRestoreUsage } from "../src/lib/restore-service";
-import { buildCumulativeBackupKey, stableStringify } from "../src/lib/usage";
+import {
+  buildCumulativeBackupKey,
+  flattenUsageDetails,
+  rebuildUsageExport,
+  stableStringify
+} from "../src/lib/usage";
 import { FakeCliproxyClient, FakeSnapshotBucket, FakeUsageRepository, createEmptyExportPayload, createExportPayload } from "./fixtures";
 
 describe("maybeRestoreUsage", () => {
@@ -132,5 +137,155 @@ describe("maybeRestoreUsage", () => {
     expect(result.status).toBe("restored");
     expect(bucket.objects.get(buildCumulativeBackupKey("default"))).toBe(stableStringify(backupPayload));
     expect(repo.state?.backupR2Key).toBe(buildCumulativeBackupKey("default"));
+  });
+
+  it("restores only missing history when current usage is non-empty but behind the cumulative backup", async () => {
+    const backupPayload = createExportPayload();
+    const currentPayload = rebuildUsageExport(
+      flattenUsageDetails(backupPayload).slice(1),
+      "2026-04-25T07:20:00Z",
+      backupPayload.version
+    );
+    const client = new FakeCliproxyClient(currentPayload);
+    const bucket = new FakeSnapshotBucket();
+    const repo = new FakeUsageRepository();
+    const key = buildCumulativeBackupKey("default");
+
+    await repo.setState({
+      instanceId: "default",
+      lastBackupAt: "2026-04-25T07:00:00Z",
+      lastBackupHash: "abc",
+      lastRestoreAt: "2026-04-25T07:20:00Z",
+      lastRestoreSnapshotId: null,
+      lastSeenEmptyAt: null,
+      lastError: null,
+      backupR2Key: key,
+      lastNonEmptyBackupAt: "2026-04-25T07:00:00Z",
+      backupTotalRequests: 2,
+      backupTotalTokens: 42,
+      backupItemCount: 2,
+      updatedAt: "2026-04-25T07:20:00Z"
+    });
+    await bucket.put(key, JSON.stringify(backupPayload));
+
+    const result = await maybeRestoreUsage({
+      now: "2026-04-25T07:25:00Z",
+      instanceId: "default",
+      cooldownMinutes: 30,
+      autoRestoreEnabled: true,
+      client,
+      bucket,
+      repo
+    });
+
+    expect(result).toMatchObject({
+      status: "restored",
+      restoreMode: "missing-history"
+    });
+    expect(client.importCalls).toHaveLength(1);
+    expect(client.importCalls[0]?.usage.total_requests).toBe(1);
+    expect(client.importCalls[0]?.usage.total_tokens).toBe(21);
+    expect(client.importCalls[0]?.usage.apis["POST /v1/chat/completions"]?.models["gpt-4.1-mini"]?.details).toHaveLength(1);
+    expect(repo.syncRuns.at(-1)?.message).toContain("missing history");
+  });
+
+  it("does not restore non-empty usage when it is not behind the cumulative backup", async () => {
+    const currentPayload = createExportPayload();
+    const client = new FakeCliproxyClient(currentPayload);
+    const bucket = new FakeSnapshotBucket();
+    const repo = new FakeUsageRepository();
+    const key = buildCumulativeBackupKey("default");
+
+    await repo.setState({
+      instanceId: "default",
+      lastBackupAt: "2026-04-25T07:00:00Z",
+      lastBackupHash: "abc",
+      lastRestoreAt: "2026-04-25T06:00:00Z",
+      lastRestoreSnapshotId: null,
+      lastSeenEmptyAt: null,
+      lastError: null,
+      backupR2Key: key,
+      lastNonEmptyBackupAt: "2026-04-25T07:00:00Z",
+      backupTotalRequests: 2,
+      backupTotalTokens: 42,
+      backupItemCount: 2,
+      updatedAt: "2026-04-25T07:00:00Z"
+    });
+    await bucket.put(key, JSON.stringify(currentPayload));
+
+    const result = await maybeRestoreUsage({
+      now: "2026-04-25T07:40:00Z",
+      instanceId: "default",
+      cooldownMinutes: 30,
+      autoRestoreEnabled: true,
+      client,
+      bucket,
+      repo
+    });
+
+    expect(result).toMatchObject({
+      status: "not-behind"
+    });
+    expect(client.importCalls).toHaveLength(0);
+    expect(repo.syncRuns.at(-1)?.message).toContain("not behind");
+  });
+
+  it("restores missing history even when current summary matches the cumulative backup", async () => {
+    const backupPayload = createExportPayload();
+    const backupEntries = flattenUsageDetails(backupPayload);
+    const currentPayload = rebuildUsageExport(
+      [
+        backupEntries[0],
+        {
+          ...backupEntries[1],
+          detail: {
+            ...backupEntries[1].detail,
+            timestamp: "2026-04-25T07:01:00Z",
+            auth_index: "def"
+          }
+        }
+      ],
+      "2026-04-25T07:20:00Z",
+      backupPayload.version
+    );
+    const client = new FakeCliproxyClient(currentPayload);
+    const bucket = new FakeSnapshotBucket();
+    const repo = new FakeUsageRepository();
+    const key = buildCumulativeBackupKey("default");
+
+    await repo.setState({
+      instanceId: "default",
+      lastBackupAt: "2026-04-25T07:00:00Z",
+      lastBackupHash: "abc",
+      lastRestoreAt: "2026-04-25T06:00:00Z",
+      lastRestoreSnapshotId: null,
+      lastSeenEmptyAt: null,
+      lastError: null,
+      backupR2Key: key,
+      lastNonEmptyBackupAt: "2026-04-25T07:00:00Z",
+      backupTotalRequests: 2,
+      backupTotalTokens: 42,
+      backupItemCount: 2,
+      updatedAt: "2026-04-25T07:00:00Z"
+    });
+    await bucket.put(key, JSON.stringify(backupPayload));
+
+    const result = await maybeRestoreUsage({
+      now: "2026-04-25T07:40:00Z",
+      instanceId: "default",
+      cooldownMinutes: 30,
+      autoRestoreEnabled: true,
+      client,
+      bucket,
+      repo
+    });
+
+    expect(result).toMatchObject({
+      status: "restored",
+      restoreMode: "missing-history"
+    });
+    expect(client.importCalls).toHaveLength(1);
+    expect(client.importCalls[0]?.usage.total_requests).toBe(1);
+    expect(client.importCalls[0]?.usage.total_tokens).toBe(21);
   });
 });

@@ -23,7 +23,7 @@ export async function runAutomaticSync(options: AutomaticSyncOptions) {
     repo: options.repo
   });
 
-  if (restoreResult.status === "restored") {
+  if (restoreResult.status === "restored" && restoreResult.restoreMode === "empty-instance") {
     return {
       restoreResult,
       backupResult: null

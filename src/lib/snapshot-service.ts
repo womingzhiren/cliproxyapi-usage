@@ -2,9 +2,9 @@ import type { CliproxyClient, SnapshotBucket, UsageRepository } from "./contract
 import {
   buildCumulativeBackupKey,
   mergeUsageExports,
-  sha256Hex,
   stableStringify,
-  summarizeUsageExport
+  summarizeUsageExport,
+  usageContentHash
 } from "./usage";
 import type { InstanceStateRecord, SnapshotRecord, SyncRunRecord } from "../types";
 
@@ -55,7 +55,7 @@ export async function backupUsage(options: BackupUsageOptions) {
     const existingPayload = existingRaw ? (JSON.parse(existingRaw) as typeof payload) : null;
     const mergedPayload = mergeUsageExports(existingPayload, payload);
     const mergedSummary = summarizeUsageExport(mergedPayload);
-    const contentHash = await sha256Hex(mergedPayload);
+    const contentHash = await usageContentHash(mergedPayload);
 
     if (state?.lastBackupHash === contentHash) {
       await repo.setState({

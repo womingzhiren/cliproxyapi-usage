@@ -30,6 +30,13 @@ export async function sha256Hex(value: unknown): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+export async function usageContentHash(payload: CliproxyExportPayload): Promise<string> {
+  return sha256Hex({
+    version: payload.version,
+    usage: rebuildUsageExport(flattenUsageDetails(payload), "", payload.version).usage
+  });
+}
+
 export function summarizeUsageExport(payload: CliproxyExportPayload): UsageSummary {
   const totalRequests = payload.usage.total_requests ?? 0;
   const totalTokens = payload.usage.total_tokens ?? 0;
@@ -92,6 +99,18 @@ export function mergeUsageExports(existing: CliproxyExportPayload | null, incomi
 
   const mergedPayload = rebuildUsageExport(Array.from(mergedEntries.values()), incoming.exported_at, incoming.version);
   return mergedPayload;
+}
+
+export function subtractUsageExports(
+  source: CliproxyExportPayload,
+  current: CliproxyExportPayload
+): CliproxyExportPayload {
+  const currentEntries = new Set(flattenUsageDetails(current).map(usageDetailFingerprint));
+  const missingEntries = flattenUsageDetails(source).filter(
+    (entry) => !currentEntries.has(usageDetailFingerprint(entry))
+  );
+
+  return rebuildUsageExport(missingEntries, source.exported_at, source.version);
 }
 
 export function rebuildUsageExport(

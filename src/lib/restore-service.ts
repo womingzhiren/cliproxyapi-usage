@@ -1,5 +1,11 @@
 import type { CliproxyClient, SnapshotBucket, UsageRepository } from "./contracts";
-import { buildCumulativeBackupKey, sha256Hex, stableStringify, summarizeUsageExport } from "./usage";
+import {
+  buildCumulativeBackupKey,
+  stableStringify,
+  subtractUsageExports,
+  summarizeUsageExport,
+  usageContentHash
+} from "./usage";
 import type { CliproxyExportPayload, InstanceStateRecord, SyncRunRecord } from "../types";
 
 interface RestoreOptions {
@@ -13,7 +19,15 @@ interface RestoreOptions {
   runType?: SyncRunRecord["runType"];
 }
 
-export async function maybeRestoreUsage(options: RestoreOptions) {
+export type RestoreResult =
+  | { status: "disabled" }
+  | { status: "cooldown" }
+  | { status: "no-baseline" }
+  | { status: "not-behind" }
+  | { status: "failed"; error: string }
+  | { status: "restored"; restoreMode: "empty-instance" | "missing-history" };
+
+export async function maybeRestoreUsage(options: RestoreOptions): Promise<RestoreResult> {
   const { now, instanceId, cooldownMinutes, autoRestoreEnabled, client, bucket, repo } = options;
   const runType = options.runType ?? "restore";
   const startedAt = now;
@@ -28,10 +42,50 @@ export async function maybeRestoreUsage(options: RestoreOptions) {
 
   try {
     const currentExport = await client.exportUsage();
-    const summary = summarizeUsageExport(currentExport);
-    if (!summary.isEmpty) {
-      await repo.recordRun(skipRun(instanceId, runType, startedAt, now, "usage not empty"));
-      return { status: "not-empty" as const };
+    if (!summarizeUsageExport(currentExport).isEmpty) {
+      const baseline = await loadRestoreBaseline(instanceId, state, repo, bucket, now);
+      if (!baseline) {
+        await repo.recordRun(skipRun(instanceId, runType, startedAt, now, "no restore baseline"));
+        return { status: "no-baseline" as const };
+      }
+
+      const missingPayload = subtractUsageExports(baseline.payload, currentExport);
+      const missingSummary = summarizeUsageExport(missingPayload);
+
+      if (missingSummary.isEmpty) {
+        await repo.recordRun(skipRun(instanceId, runType, startedAt, now, "current usage not behind cumulative backup"));
+        return { status: "not-behind" as const };
+      }
+
+      const importResult = await client.importUsage(missingPayload);
+
+      await repo.setState({
+        ...coerceState(state, instanceId, now),
+        lastRestoreAt: now,
+        lastRestoreSnapshotId: null,
+        backupR2Key: baseline.key,
+        lastNonEmptyBackupAt: state?.lastNonEmptyBackupAt ?? now,
+        backupTotalRequests: baseline.summary.totalRequests,
+        backupTotalTokens: baseline.summary.totalTokens,
+        backupItemCount: baseline.summary.itemCount,
+        lastBackupHash: baseline.hash,
+        lastError: null
+      });
+      await repo.recordRun({
+        id: crypto.randomUUID(),
+        instanceId,
+        runType,
+        status: "success",
+        message: `restored ${importResult.total_requests} missing history requests from cumulative backup`,
+        snapshotId: null,
+        startedAt,
+        finishedAt: now
+      });
+
+      return {
+        status: "restored" as const,
+        restoreMode: "missing-history" as const
+      };
     }
 
     if (isInCooldown(state?.lastRestoreAt ?? null, now, cooldownMinutes)) {
@@ -80,7 +134,8 @@ export async function maybeRestoreUsage(options: RestoreOptions) {
     });
 
     return {
-      status: "restored" as const
+      status: "restored" as const,
+      restoreMode: "empty-instance" as const
     };
   } catch (error) {
     await repo.setState({
@@ -144,7 +199,7 @@ async function loadRestoreBaseline(
         key,
         payload,
         summary,
-        hash: await sha256Hex(payload)
+        hash: await usageContentHash(payload)
       };
     }
   }
@@ -165,7 +220,7 @@ async function loadRestoreBaseline(
       key,
       payload,
       summary,
-      hash: await sha256Hex(payload)
+      hash: await usageContentHash(payload)
     };
   }
 

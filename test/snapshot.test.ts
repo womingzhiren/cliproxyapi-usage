@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { backupUsage } from "../src/lib/snapshot-service";
-import { buildCumulativeBackupKey, mergeUsageExports, sha256Hex, stableStringify } from "../src/lib/usage";
+import { buildCumulativeBackupKey, mergeUsageExports, stableStringify, usageContentHash } from "../src/lib/usage";
 import { createEmptyExportPayload, createExportPayload, FakeCliproxyClient, FakeSnapshotBucket, FakeUsageRepository } from "./fixtures";
 
 describe("backupUsage", () => {
@@ -23,7 +23,7 @@ describe("backupUsage", () => {
     expect(result.status).toBe("stored");
     expect(repo.snapshots).toHaveLength(1);
     expect(bucket.objects.size).toBe(1);
-    expect(repo.state?.lastBackupHash).toBe(await sha256Hex(JSON.parse(stored!)));
+    expect(repo.state?.lastBackupHash).toBe(await usageContentHash(JSON.parse(stored!)));
     expect(repo.state?.backupR2Key).toBe(buildCumulativeBackupKey("default"));
     expect(result.summary).toMatchObject({
       totalRequests: 2,
@@ -42,7 +42,7 @@ describe("backupUsage", () => {
     const repo = new FakeUsageRepository();
     const key = buildCumulativeBackupKey("default");
     const merged = mergeUsageExports(null, payload);
-    const hash = await sha256Hex(merged);
+    const hash = await usageContentHash(merged);
 
     await bucket.put(key, stableStringify(merged));
     await repo.setState({
@@ -111,5 +111,47 @@ describe("backupUsage", () => {
     expect(bucket.objects.get(key)).toBe(JSON.stringify(previousPayload));
     expect(repo.snapshots).toHaveLength(0);
     expect(repo.state?.lastNonEmptyBackupAt).toBe("2026-04-25T07:00:00Z");
+  });
+
+  it("does not write a new snapshot when only exported_at changed", async () => {
+    const previousPayload = createExportPayload();
+    const nextPayload = createExportPayload({
+      exported_at: "2026-04-25T07:10:00Z"
+    });
+    const client = new FakeCliproxyClient(nextPayload);
+    const bucket = new FakeSnapshotBucket();
+    const repo = new FakeUsageRepository();
+    const key = buildCumulativeBackupKey("default");
+    const merged = mergeUsageExports(null, previousPayload);
+    const hash = await usageContentHash(merged);
+
+    await bucket.put(key, stableStringify(merged));
+    await repo.setState({
+      instanceId: "default",
+      lastBackupAt: "2026-04-25T07:00:00Z",
+      lastBackupHash: hash,
+      lastRestoreAt: null,
+      lastRestoreSnapshotId: null,
+      lastSeenEmptyAt: null,
+      lastError: null,
+      backupR2Key: key,
+      lastNonEmptyBackupAt: "2026-04-25T07:00:00Z",
+      backupTotalRequests: 2,
+      backupTotalTokens: 42,
+      backupItemCount: 2,
+      updatedAt: "2026-04-25T07:00:00Z"
+    });
+
+    const result = await backupUsage({
+      now: "2026-04-25T07:10:00Z",
+      instanceId: "default",
+      client,
+      bucket,
+      repo
+    });
+
+    expect(result.status).toBe("unchanged");
+    expect(repo.snapshots).toHaveLength(0);
+    expect(bucket.objects.get(key)).toBe(stableStringify(merged));
   });
 });
